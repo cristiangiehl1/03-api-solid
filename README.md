@@ -18,8 +18,8 @@
 - [x] user shouldn't be able to do 2 check-ins on the same day;
 - [x] user shouldn't be able to do a check-in if not within 100 meters of the gym;
 - [x] check-in can only be validated within 20 minutes of its creation;
-- [ ] check-in can only be validated by admins;
-- [ ] gyms can only be registered by admins.
+- [x] check-in can only be validated by admins;
+- [x] gyms can only be registered by admins.
 
 
 ## Requisitos Não Funcionais (RNF)

@@ -26,7 +26,7 @@
 - [x] users passwords must be encrypted;
 - [x] API data must be persisted in a PostgreSQL database;
 - [x] all lists of data must be paginated with 20 items per page;
-- [ ] user must be authenticated using JWT (JSON Web Token).
+- [x] user must be authenticated using JWT (JSON Web Token).
 
 # First steps
 1) Create a `package.json` file:
@@ -857,7 +857,7 @@ After registering the JWT plugin, the Fastify reply and request objects will hav
 
 Use `jwtSign` to create a new JWT, typically used in authentication routes.
 
-"In the `sign`, send the user.id to be accessible in all routes of the app."
+In the `sign`, send the user.id to be accessible in all routes of the app.
 
 ```
   const token = await reply.jwtSign(
@@ -914,4 +914,691 @@ declare module '@fastify/jwt' {
 ```
 
 # Test environment
+End-to-end tests need to use a real database (not in memory), but we cannot use the same database for both production and testing.
 
+End-to-end tests will require more memory on the user's computer, which comes at the cost of performance. They are slower than unit tests, but more efficient and closer to real user requests.
+
+Currently, `Vitest` doesn't support direct environment configurations. To work around this, you need to create a folder inside the prisma directory in your project's root called `vitest-environment-prisma`, and then run:
+
+```bash
+npm init-y
+```
+
+**The folder name must begin with `vitest-environment`**
+
+1) Test Environment Configuration
+Create a new file `prisma-test-environment.ts` and don't forget to update the `main` field in the `package.json`.
+
+```
+export default {
+  name: 'prisma',
+  transformMode: 'ssr',
+  async setup() {
+    console.log('Setup.')
+
+    return {
+      teardown() {
+        console.log('Teardown')
+      },
+    }
+  },
+}
+```
+
+3) `package.json` inside Test Environment folder.
+
+The `name` must be the same as the folder name.
+
+```
+{
+  "name": "vitest-environment-prisma",
+  "version": "1.0.0",
+  "description": "",
+  "main": "prisma-test-environment.ts",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+```
+
+Our `root package.json` needs to access this `env package.json`. To do that run: 
+
+```bash
+npm link
+```
+
+**Don't forget to run this CLI command inside de environment folder**
+
+
+In the root of our project, run: 
+```bash
+npm link vitest-environment-prisma
+```
+
+**IMPORTANT!**
+The `npm link` will only work locally. When you deploy the application to a server, you will need to run the command again. To automate this, create a script to execute this command. Otherwise, the root package.json will not be able to access the environment package.json.
+
+**NOTE: When you write a script in the `package.json` file, if the script name has a `pre` or `post` prefix, it will affect how the script is executed:**
+- `pre` scripts will be executed before the main script.
+- `post` scripts will be executed after the main script.
+
+Example:
+```
+{
+  scripts: {
+    "pretest": "echo before hi",
+    "test": "echo this is your main script",
+    "posttest": "echo hi after"
+  }
+}
+```
+
+Terminal sequence:
+```
+echo before hi
+echo this is your main script
+echo hi after
+```
+
+4) Update root package.json 
+`npm-run-all` will ensure that scripts are compatible with the current operating system.
+
+```bash
+npm i -D npm-run-all
+```
+
+All of this said, adjust the package.json file in the root of your project:
+
+```
+{
+  scripts: {
+    "test:create-prisma-environment": "npm link ./prisma/vitest-environment-prisma",
+    "test:install-prisma-environment": "npm link vitest-environment-prisma",
+    "pretest:e2e": "run-s test:create-prisma-environment test:install-prisma-environment",
+    "test:e2e": "vitest run --dir src/http/",
+  }
+}
+```
+
+**Running `npm run test:e2e` will execute all the scripts above.**
+
+
+1) `vite.config.ts`
+The `environmentMatchGlobs` must be:
+1º The path where the tests are located;
+2º The name of the test environment set inside the `vitest-environment` folder.
+
+**The name defined within the environment configuration must match the name following vitest-environment in the folder name.**
+
+```
+import tsConfigPaths from 'vite-tsconfig-paths'
+import { defineConfig } from 'vitest/config'
+
+export default defineConfig({
+  plugins: [tsConfigPaths()],
+  test: {
+    environmentMatchGlobs: [['src/http/controllers/tests/**', 'prisma']],
+    dir: 'src',
+  },
+})
+```
+
+6) Testing the new environment
+To check if the Vitest environment is working, create a new `.spec` file in the specified path and run:
+
+```bash
+npm run test
+```
+
+It should be working and executing for each file inside the specified path.
+
+
+## End-to-end (e2e) tests are typically executed in CI (continuous Integration).
+End-to-end tests verify the overall functionality of a system by simulating user interactions. They test the integration of various components to ensure that the entire application works as expected.
+
+E2E tests are often resource-intensive and require a consistent environment. Running them in a CI environment provides a clean and controlled setting, which helps in accurately assessing the integration of different parts of the application.
+
+Continuous Integration (CI) systems automatically build, test, and deploy code changes. They provide a consistent environment for running tests, which is ideal for e2e tests that need a stable setup to simulate real user interactions.
+
+Because of that, it is recommended to split the scripts for unit tests and e2e tests:
+- Unit Tests: Ideal for local execution during development.
+- E2E Tests: Best suited for execution in CI environments to ensure consistent and accurate results.
+
+In your `root package.json` do the following:
+```
+{
+  scripts: {
+    "test": "vitest run --dir src/services",
+    "test:watch": "vitest --dir src/services",
+    "test:e2e": "vitest run --dir src/http/"
+  }
+}
+```
+
+# PostgreSQL Schemas
+In PostgreSQL, a schema is a namespace within a database that allows you to organize and manage your database objects (such as tables, views, functions, etc.) more efficiently. Instead of splitting your database into multiple databases, you can use schemas to logically group related objects within the same database.
+
+Imagine you have an application with two different modules: auth and sales. Instead of creating separate databases for each module, you can create separate schemas within a single database:
+- auth schema: Contains tables like users, roles, permissions.
+- sales schema: Contains tables like orders, products, customers.
+
+## How Schemas Work
+- **Default Schema:** When you create objects without specifying a schema, they are placed in the `public` schema by default.
+**Accessing Objects:** You can access objects within a schema using the schema_name.object_name syntax. For example, auth.users refers to the users table within the auth schema.
+
+## Advantages
+- **Organization**: Schemas help in organizing database objects logically.
+- **Access Control:** You can assign different permissions to different schemas, providing better access control.
+- **Simplified Development:** Developers can work on different modules independently without interfering with each other's work.
+
+## Implementing
+We are using `migrate deploy` instead of `migrate dev` because 
+`migrate dev` will compare the local schema with the existing database 
+schema, which can lead to conflicts or unintended changes during 
+development. migrate deploy is better suited for deploying migrations i
+n production environments, as it only applies the migrations that
+haven't been executed yet, without altering the current database 
+schema unexpectedly. 
+
+`execSync` allows us to execute CLI commands directly within our code, synchronously, meaning the code will wait for the command to complete before moving on to the next operation.
+
+`async setup()` will be executed before each test.
+`async teardown()` will be executed after each test.
+
+```
+import 'dotenv/config'
+
+import { execSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+
+import { PrismaClient } from '@prisma/client'
+
+const prisma = new PrismaClient()
+
+function generateDatabaseUrl(schema: string) {
+  if (!process.env.DATABASE_URL) {
+    throw new Error('Please provide a DATABASE_URL environment variable.')
+  }
+
+  const url = new URL(process.env.DATABASE_URL)
+
+  url.searchParams.set('schema', schema)
+
+  return url.toString()
+}
+
+export default {
+  name: 'prisma',
+  transformMode: 'ssr',
+  async setup() {
+    const schema = randomUUID()
+    const databaseURL = generateDatabaseUrl(schema)
+
+    process.env.DATABASE_URL = databaseURL
+
+    execSync('npx prisma migrate deploy')
+
+    return {
+      async teardown() {
+        await prisma.$executeRawUnsafe(
+          `DROP SCHEMA IF EXISTS "${schema}" CASCADE`,
+        )
+
+        await prisma.$disconnect()
+      },
+    }
+  },
+}
+```
+
+# Supertest lib
+```bash
+npm i -D supertest @types/supertest
+```
+Supertest is a popular Node.js library used for testing HTTP servers. It is particularly useful for testing APIs because it allows you to make HTTP requests to your server and assert the responses.
+
+## Why Use Supertest?
+- **End-to-End Testing:** Supertest is ideal for end-to-end testing of your API, ensuring that your server behaves as expected.
+- **Integration Testing:** It can be used to test the integration of various parts of your application, like controllers, middleware, and routes.
+- **Ease of Use:** Its intuitive and chainable API makes it simple to write tests that are both readable and maintainable.
+
+
+## Example
+```
+import request from 'supertest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
+import { app } from '@/app'
+
+describe('Register (e2e)', () => {
+  beforeAll(async () => {
+    await app.ready()
+  })
+
+  afterAll(async () => {
+    await app.close()
+  })
+
+  it('should be able to register', async () => {
+    const response = await request(app.server).post('/users').send({
+      name: 'John Doe',
+      email: 'johndoe@example.com',
+      password: '123456',
+    })
+
+    expect(response.statusCode).toEqual(201)
+  })
+})
+```
+
+# IMPORTANT!!!!! EVERY QUERY PARAMS WILL BE SENT AS A STRING.
+
+
+
+# Refresh Token
+The concept of a Refresh Token is central to token-based authentication systems, such as `OAuth 2.0` and `JWT (JSON Web Token)`. It is used to enhance the security and usability of authenticated sessions, allowing a user to maintain an active session for an extended period without needing to re-authenticate repeatedly.
+
+
+## Cookie and Refresh Token
+Storing the `refresh token` in a cookie is a common security practice in web development.
+
+```bash
+npm i @fastify/cookie
+```
+
+It will unlock the `setCookie()` function on our reply object.
+
+### setCookie() explanation of each configuration option:
+1) path: '/'
+- Definition: Specifies the URL path for which the cookie is valid.
+- Purpose: Setting the path to '/' makes the cookie available across the entire domain.
+
+2) secure: true
+- Definition: Ensures that the cookie is only sent over secure HTTPS connections.
+- Purpose: Enhances security by preventing the cookie from being transmitted over unencrypted HTTP connections.
+
+3) sameSite: 'true' / 'strict'
+- Definition: Controls whether the cookie is sent with cross-site requests.
+- Purpose: 'true' / 'strict' value means the cookie will only be sent if the request originates from the same site that set the cookie. This prevents the cookie from being sent with requests initiated by third-party sites, enhancing security against cross-site request forgery (CSRF) attacks.
+
+4) httpOnly: true
+- Definition: Specifies that the cookie is accessible only via HTTP(S) and not available to JavaScript running in the browser.
+- Purpose: Prevents client-side scripts from accessing the cookie, which helps protect against cross-site scripting (XSS) attacks by ensuring that sensitive data is not exposed to client-side scripts.
+
+#### Setcookie() Summary
+- path: '/': The cookie is valid for the entire domain.
+- secure: true: The cookie is only sent over HTTPS connections.
+- sameSite: 'Strict': The cookie is only sent with requests originating from the same site, protecting against CSRF attacks.
+- httpOnly: true: The cookie is not accessible via JavaScript, protecting against XSS attacks.
+
+
+## How the Refresh Token Works:
+1) Initial Authentication:
+
+- When the user logs in, the server issues two tokens: an `Access Token` and a `Refresh Token`.
+- The `Access Token` has a short validity, usually lasting a few minutes to a few hours. It is used to authenticate the user's requests to APIs and protected resources.
+- The `Refresh Token` has a longer validity, potentially lasting days, weeks, or even months.
+
+2) Using the Access Token:
+- As long as the Access Token is valid, it is sent along with requests to authorize access to protected resources. This is usually done in the Authorization header.
+
+3) Expiration of the Access Token:
+- When the Access Token expires, the user can no longer access protected resources. However, instead of requiring the user to log in again, the Refresh Token is used.
+
+4) Using the Refresh Token:
+- The Refresh Token is sent to the server in a specific request to obtain a new Access Token.
+- If the Refresh Token is valid and has not expired, the server issues a new Access Token and, in some cases, also a new Refresh Token.
+
+5) Session Renewal:
+- The cycle of obtaining new Access Tokens using the Refresh Token can continue until the Refresh Token expires or is revoked.
+
+6) Security:
+- The Refresh Token must be handled with great security, as it allows obtaining new Access Tokens. It is usually stored in a more secure location, such as HttpOnly cookies, to protect against cross-site scripting (XSS) attacks.
+
+## Advantages of Using Refresh Tokens:
+- **Long and Secure Sessions:** Allows for long sessions without the user needing to re-authenticate repeatedly, improving the user experience.
+- **Reduced Exposure:** Since the Access Token has a short lifespan, the exposure in case of compromise is reduced. Even if an access token is stolen, it quickly becomes useless.
+- **Revocation:** The Refresh Token can be revoked in situations such as user logout or detection of suspicious activity.
+
+
+## Example:
+`app.ts`
+```
+app.register(fastifyJwt, {
+  secret: env.JWT_SECRET,
+  cookie: {
+    cookieName: 'refreshToken',
+    signed: false,
+  },
+  sign: {
+    expiresIn: '10m',
+  },
+})
+```
+
+`authenticate.ts`
+```
+import { FastifyReply, FastifyRequest } from 'fastify'
+import { z } from 'zod'
+
+import { InvalidCredentialsError } from '@/services/errors/invalid-credentials-error'
+import { makeAuthenticateService } from '@/services/factories/make-authenticate-service'
+
+export async function authenticate(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  const authenticateBodySchema = z.object({
+    email: z.string().email(),
+    password: z.string().min(6),
+  })
+
+  const { email, password } = authenticateBodySchema.parse(request.body)
+
+  try {
+    const authenticateService = makeAuthenticateService()
+
+    const { user } = await authenticateService.execute({ email, password })
+
+    // create a new access token
+    const token = await reply.jwtSign(
+      {},
+      {
+        sign: {
+          sub: user.id,
+        },
+      },
+    )
+
+    // create a new refresh token
+    const refreshToken = await reply.jwtSign(
+      {},
+      {
+        sign: {
+          sub: user.id,
+          expiresIn: '7d',
+        },
+      },
+    )
+
+    return reply
+      .setCookie('refreshToken', refreshToken, {
+        path: '/',
+        secure: true,
+        sameSite: true,
+        httpOnly: true,
+      })
+      .status(200)
+      .send({ token })
+  } catch (err) {
+    if (err instanceof InvalidCredentialsError) {
+      return reply.status(400).send({ message: err.message })
+    }
+
+    throw err
+  }
+}
+```
+
+`refresh.ts`
+It will check if the refreshToken exists inside our cookies. If it doesn’t, it will return an error."
+
+```
+await request.jwtVerify({ onlyCookie: true })
+```
+
+```
+import { FastifyReply, FastifyRequest } from 'fastify'
+
+export async function refresh(request: FastifyRequest, reply: FastifyReply) {
+  await request.jwtVerify({ onlyCookie: true })
+
+  // create a new access token
+  const token = await reply.jwtSign(
+    {},
+    {
+      sign: {
+        sub: request.user.sub,
+      },
+    },
+  )
+
+  // create a new refresh token
+  const refreshToken = await reply.jwtSign(
+    {},
+    {
+      sign: {
+        sub: request.user.sub,
+        expiresIn: '7d',
+      },
+    },
+  )
+
+  return reply
+    .setCookie('refreshToken', refreshToken, {
+      path: '/',
+      secure: true,
+      sameSite: true,
+      httpOnly: true,
+    })
+    .status(200)
+    .send({ token })
+}
+```
+
+# Role-Based Access Control (RBAC)
+A widely used approach for managing permissions and access within systems. It assigns roles to users, and each role has specific permissions associated with it. Here’s a breakdown of the RBAC context:
+
+## Key Concepts:
+1) Roles:
+- Definition: Roles are predefined sets of permissions that are assigned to users. A role represents a job function or position within an organization.
+- Examples: Admin, Manager, User, Guest. 
+
+2) Permissions:
+- Definition: Permissions define what actions can be performed on specific resources or data.
+- Examples: Read, Write, Delete, Execute.
+
+3) Users:
+- Definition: Users are individuals who access the system and are assigned roles. Each user can have one or more roles.
+- Example: John Doe (Admin), Jane Smith (User).
+
+
+4) Role Assignments:
+- Definition: Role assignments link users to roles. A user can be assigned one or multiple roles depending on their responsibilities.
+- Example: John Doe is assigned the Admin role, giving him access to all system functions.
+
+## fastify-jwt.d.ts
+
+```
+import '@fastify/jwt'
+
+declare module '@fastify/jwt' {
+  export interface FastifyJWT {
+    user: {
+      sub: string
+      role: 'ADMIN' | 'MEMBER'
+    }
+  }
+}
+```
+
+## authenticate.ts (token creation)
+
+```
+import { FastifyReply, FastifyRequest } from 'fastify'
+import { z } from 'zod'
+
+import { InvalidCredentialsError } from '@/services/errors/invalid-credentials-error'
+import { makeAuthenticateService } from '@/services/factories/make-authenticate-service'
+
+export async function authenticate(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  const authenticateBodySchema = z.object({
+    email: z.string().email(),
+    password: z.string().min(6),
+  })
+
+  const { email, password } = authenticateBodySchema.parse(request.body)
+
+  try {
+    const authenticateService = makeAuthenticateService()
+
+    const { user } = await authenticateService.execute({ email, password })
+
+    // create a new access token
+    const token = await reply.jwtSign(
+      {
+        role: user.role,
+      },
+      {
+        sign: {
+          sub: user.id,
+        },
+      },
+    )
+
+    // create a new refresh token
+    const refreshToken = await reply.jwtSign(
+      {
+        role: user.role,
+      },
+      {
+        sign: {
+          sub: user.id,
+          expiresIn: '7d',
+        },
+      },
+    )
+
+    return reply
+      .setCookie('refreshToken', refreshToken, {
+        path: '/',
+        secure: true,
+        sameSite: true,
+        httpOnly: true,
+      })
+      .status(200)
+      .send({ token })
+  } catch (err) {
+    if (err instanceof InvalidCredentialsError) {
+      return reply.status(400).send({ message: err.message })
+    }
+
+    throw err
+  }
+}
+```
+
+## refresh.ts
+```
+import { FastifyReply, FastifyRequest } from 'fastify'
+
+export async function refresh(request: FastifyRequest, reply: FastifyReply) {
+  await request.jwtVerify({ onlyCookie: true })
+
+  const { role } = request.user
+
+  // update a new access token
+  const token = await reply.jwtSign(
+    {
+      role,
+    },
+    {
+      sign: {
+        sub: request.user.sub,
+      },
+    },
+  )
+
+  // update a new refresh token
+  const refreshToken = await reply.jwtSign(
+    {
+      role,
+    },
+    {
+      sign: {
+        sub: request.user.sub,
+        expiresIn: '7d',
+      },
+    },
+  )
+
+  return reply
+    .setCookie('refreshToken', refreshToken, {
+      path: '/',
+      secure: true,
+      sameSite: true,
+      httpOnly: true,
+    })
+    .status(200)
+    .send({ token })
+}
+```
+
+## Create a middleware to handle role verification
+
+```
+import { FastifyReply, FastifyRequest } from 'fastify'
+
+export function verifyUserRole(roleToVerify: 'ADMIN' | 'MEMBER') {
+  return (request: FastifyRequest, reply: FastifyReply) => {
+    const { role } = request.user
+
+    if (role !== roleToVerify) {
+      return reply.status(401).send({
+        message:
+          'Your role does not have the necessary privileges to perform this action.',
+      })
+    }
+  }
+}
+```
+
+You can apply the middleware in the controllers, specifying the required role.
+
+```
+app.post('/gyms', { onRequest: [verifyUserRole('ADMIN')] }, createGym)
+```
+
+# Continuous Integration (CI) | Continuous Deployment/Delivery (CD)
+
+## Continuous Integration (CI) 
+Is a development practice where code changes are frequently integrated into a shared repository.
+
+
+## Continuous Deployment (CD) and Continuous Delivery (CD) 
+Are practices that extend Continuous Integration to automate the deployment of code changes to production or staging environments.
+
+## Github Actions
+In the root of the project, create a `.github` folder. Inside it, create another folder named `workflows`.
+
+Inside the `workflows` folder, create the workflow files you want to execute. The files need to be `.yml`
+
+You can also use pre-defined actions available in the GitHub Actions Marketplace.
+
+
+`Action.yml` file example: 
+
+```
+name: Run Unit Tests
+
+on: [push]
+
+jobs:
+  run-unit-tests:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+      - run: npm ci
+      
+      - run: npm test
+```
